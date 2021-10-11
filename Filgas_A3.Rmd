@@ -1,0 +1,147 @@
+---
+title: "Filgas_A3"
+author: "Lindsay Filgas"
+date: "10/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+```{r}
+library(censusapi)
+library(tidyverse)
+library(tigris)
+library(sf)
+library(leaflet)
+
+Sys.setenv(CENSUS_KEY="7305c43b014cedd32494ba8e15939faf9f133077")
+
+temp <- tempfile()
+download.file("https://www2.census.gov/programs-surveys/acs/data/pums/2019/1-Year/csv_hca.zip",destfile = temp)
+
+pums_hca_2019_1yr <- read_csv(unzip(temp,"psam_h06.csv"))
+
+unlink(temp)
+```
+
+```{r}
+pums_2019_1yr <- getCensus(
+  name = "acs/acs1/pums",
+  vintage = 2019,
+  region = "public use microdata area:*", 
+  regionin = "state:06",
+  vars = c(
+    "SERIALNO",
+    "SPORDER",
+    "PWGTP",
+    "WGTP",
+    "NP",
+    "HHL",
+    "HINCP",
+    "TEN",
+    "MULTG"
+  )
+)
+```
+
+```{r}
+ca_pumas <-
+  pumas("CA", cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_counties <-
+  counties("CA", cb = T, progress_bar = F) %>%
+  filter(NAME %in% bay_county_names)
+
+bay_pumas <-
+  ca_pumas %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_pumas %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+bay_pums <-
+  pums_2019_1yr %>% 
+  mutate(
+    PUMA = str_pad(public_use_microdata_area,5,"left","0")
+  ) %>% 
+  filter(PUMA %in% bay_pumas$PUMACE10)
+```
+
+```{r}
+bay_pums_example <-
+  bay_pums %>% 
+  filter(!duplicated(SERIALNO)) %>% 
+  mutate(
+    WGTP = as.numeric(WGTP),
+    specific_population = ifelse(
+      (MULTG == 2) &
+      (HHL == 2) &
+      (TEN == 3) &
+      (HINCP < 60000),
+      WGTP,
+      0
+    )
+  ) %>% 
+  group_by(PUMA) %>% 
+  summarize(
+    perc_specific_population =
+      sum(specific_population, na.rm =T)/sum(WGTP, na.rm = T)*100
+  ) %>% 
+  left_join(
+    bay_pumas %>% 
+      select(PUMACE10),
+    by = c("PUMA" = "PUMACE10")
+  ) %>% 
+  st_as_sf()
+```
+
+```{r}
+pums_pal <- colorNumeric(
+  palette = "Oranges",
+  domain = bay_pums_example$perc_specific_population
+)
+
+leaflet() %>%
+  addTiles() %>% 
+  addPolygons(
+    data = bay_pums_example,
+    fillColor = ~pums_pal(perc_specific_population),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(perc_specific_population), 
+      "% Spanish-speaking multigenerational renter households making less than $60K"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = bay_pums_example,
+    pal = pums_pal,
+    values = ~perc_specific_population,
+    title = "% Spanish-speaking 
+    multigenerational renter 
+    households making less than $60K"
+  )
+```
+For this map I focused on Spanish-speaking multigenerational renter households making less than $60k per year. I chose these identities based on conversations in small groups and outside understand. Spanish-speaking families may have more difficulty accessing emergency-response resources that are distributed in English. Renter households may have less stability and less disposable income to utilize during an event like a heat wave. In one of my prompt groups we spent a long time talking about multigenerational and non-nuclear families and how they may have different needs or resources. Multigenerational families may have more people relying on fewer sources of income and therefore might be at increased risk during a disaster. Lastly, I focused on households making less than 60k a year because these household will have even fewer resources available to use in an emergency. Overalll I think this map is somewhat useful in identifying vulnerable populations, but it is a very niche and specific subset of the population that is certainly not representative of all of the most vulnerable people in the Bay. There is also an assumption that a multigenerational and renter hosuehold would be more vulnerable, which might not necessarily be true. It may also be more important for heat wave safety to focus on populations that are not only economically vulnerable but also vulnerable in terms of health, such as the elderly or populations that rely on daily medical care. Additional maps could provide more information on this.
