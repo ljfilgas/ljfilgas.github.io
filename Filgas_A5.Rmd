@@ -1,0 +1,204 @@
+---
+title: "Filgas_A5"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+```{r}
+library(tidyverse)
+library(censusapi)
+library(sf)
+library(mapview)
+library(tigris)
+library(readxl)
+library(leaflet)
+
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+acs_vars_2019_5yr <-
+  listCensusMetadata(
+    name = "2019/acs/acs5",
+    type = "variables"
+  )
+```
+
+```{r}
+ces4 <- read_excel("calenviroscreen40resultsdatadictionary_F_2021.xlsx")
+
+ca_tracts <- tracts("CA", cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+```
+```{r}
+#NOT NEEDED - first chunck
+ces4_bay_pm25 <-
+  ces4 %>% 
+  filter(`California County` %in% bay_county_names) %>% 
+  select(`Census Tract`, PM2.5) %>% 
+  left_join(
+    ca_tracts %>% 
+      transmute(GEOID = as.numeric(GEOID)), 
+    by = c("Census Tract" = "GEOID")
+  ) %>% 
+  st_as_sf()
+
+ces4_bay_data <-
+  ces4 %>% 
+  filter(`California County` %in% bay_county_names) %>% 
+  select(`Census Tract`, PM2.5, Asthma) %>% 
+  left_join(
+    ca_tracts %>% 
+      transmute(GEOID = as.numeric(GEOID)), 
+    by = c("Census Tract" = "GEOID")
+  ) %>% 
+  st_as_sf()
+```
+
+PM2.5 concentrations in the Bay Area
+```{r}
+pm25_pal <- colorNumeric(
+  palette = "Reds",
+  domain = ces4_bay_data$PM2.5
+)
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = ces4_bay_data,
+    fillColor = ~pm25_pal(PM2.5),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = ~PM2.5
+  )
+```
+The CalEnviroScreen PM2.5 indicator is defined as "Annual mean concentration of PM2.5 (weighted average of measured monitor concentrations and satellite observations, µg/m3), over three years (2015 to 2017)." From this map, it is clear that the highest concentrations of PM2.5 are directly around the bay, particularly along the East Bay. The areas on the north and south ends of the Bay Area counties have much lower PM2.5 air pollution than areas like Oakland, Berkeley, and Richmond.
+
+```{r}
+#NOT NEEDED - whole section
+ces4_bay_asthma <-
+  ces4 %>% 
+  filter(`California County` %in% bay_county_names) %>% 
+  select(`Census Tract`, Asthma) %>% 
+  left_join(
+    ca_tracts %>% 
+      transmute(GEOID = as.numeric(GEOID)), 
+    by = c("Census Tract" = "GEOID")
+  ) %>% 
+  st_as_sf()
+```
+
+Rates of Asthma in the Bay Area
+```{r}
+Asthma_pal <- colorNumeric(
+  palette = "Greens",
+  domain = ces4_bay_data$Asthma
+)
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = ces4_bay_data,
+    fillColor = ~Asthma_pal(Asthma),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = ~Asthma
+  )
+```
+To measure asthma, CalEnviroScreen uses data of "Spatially modeled, age-adjusted rate of emergency room visits for asthma per 10,000 (averaged over 2015-2017)." This map shows that there are particularly high rates of asthma in Richmond, Oakland, south of Alameda, and in the Eastern parts of Solono and Contra Costa counties. There is a stark difference between the high rates here and the relatively low rates of asthma in surrounding areas like San Francisco, San Mateo, Marin, and Sonoma counties. There are some small centers of asthma in cities like San Jose and the Bayview-Hunters Point neighborhood of SF.
+
+
+Asthma hospitalizations as a function of PM2.5 concentrations in the Bay Area
+```{r}
+ggplot(
+  data = ces4_bay_data,
+  aes(
+      x = PM2.5,
+      y = Asthma
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+The best fit line does not appear to really describe what the data is doing. The data is all over the place and does not have a clear linear trend.
+
+```{r}
+model <- lm(Asthma ~ PM2.5, ces4_bay_data)
+
+summary(model)
+```
+The residuals are not symmetrically centered around zero. However, the p-values for the best fit line are significantly small, meaning that this result can be considered statistically significant. The R squared value is quite low, though, suggesting that PM2.5 cannot explain a lot of the variation in asthma. 
+
+An increase of 1 in PM2.5 is associated with an increase of 19.862 in Asthma; 9.54% of the variation in asthma is explained by the variation in PM2.5.
+
+```{r}
+plot(density(residuals(model)))
+```
+The mean of this distribution is not centered at zero (it appears closer to -25) and it is heavily skewed and asymmetrical. There is a high concentration of residuals between -50 and 25, and a long tail in the positive direction. This means our regression is not a very good representation of our data.
+
+
+Asthma hospitalizations as a log function of PM2.5 concentrations in the Bay Area
+```{r}
+ggplot(
+  data = ces4_bay_data,
+  aes(
+      x = PM2.5,
+      y = log(Asthma)
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+
+```{r}
+log_model <- lm(log(Asthma) ~ PM2.5, ces4_bay_data)
+
+summary(log_model)
+```
+```{r}
+plot(density(residuals(log_model)))
+```
+This is a  better looking distribution of residuals. The center of the distributions is around 0 and it is more or less symetterically distributed between 2 and -2, with a slight tail in the negative direction. This suggests that a log regression is a much better fit for our data than a linear regression.
+
+```{r}
+ces4_bay_residuals <-
+  ces4_bay_data %>% 
+  na.omit(ces4_bay_data) %>%
+  mutate(Residuals = log_model$residuals) %>%
+  st_as_sf()
+```
+
+```{r}
+residuals_pal <- colorNumeric(
+  palette = "Reds",
+  domain = log_model$Residuals
+)
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = ces4_bay_residuals,
+    fillColor = ~residuals_pal(Residuals),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = ~Residualsg
+  )
+```
+A negative residual suggests thatour regression model is over-estimating the rates of asthma given the concentrations of PM2.5 in these areas. The most negative residuals occur in areas directly East of Berkeley and Oakland and in large parts of San Mateo County. Specifically, This suggests that in these areas the rates of asthma are actually lower than we might predict just with PM2.5 data, which could be due to a variety of demographic or socioeeconomic facotrs in these areas. The highest residausl seem to occur in the dense centers of the East Bay and in the outer areas, including south of San Jose and the far Northern and Eastern parts of the Bay Area. 
