@@ -1,0 +1,866 @@
+---
+title: "Final Project"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F)
+```
+
+```{r}
+library(tidyverse)
+library(censusapi)
+library(sf)
+library(mapview)
+library(tigris)
+library(readxl)
+library(leaflet)
+
+Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
+
+#Load ACS data
+acs_vars_2019_5yr <-
+  listCensusMetadata(
+    name = "2019/acs/acs5",
+    type = "variables"
+  )
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+```
+#PART 1: Equity Analysis of Health Insurance Coverage in the Bay Area
+```{r}
+#Load healthcare coverage census data and create a dataframe organized by race 
+
+#Create a dataframe of racial groups used in census data
+census_race_categories <- 
+  c(
+    "White Alone",
+    "Black or African American Alone",
+    "American Indian and Alaska Native Alone",
+    "Asian Alone",
+    "Native Hawaiian and Other Pacific Islander Alone",
+    "Some Other Race Alone",
+    "Two or More Races"
+  )
+
+#Load and organize data on health insurance coverage by age group by race
+bay_hc_race <-
+  1:7 %>% 
+  map_dfr(function(x){
+    getCensus(
+      name = "acs/acs5",
+      vintage = 2019,
+      # region = "county:001, 041, 075, 081, 085, 013, 095, 097, 055",
+      # regionin = "state:06",
+      region = "tract:*",
+      regionin = "state:06, county:001,041,075,081,085,013,095,097,055",
+      vars = paste0("group(C27001",LETTERS[x],")")
+    ) %>%
+    select(GEO_ID, ends_with("E"), -c(state,NAME)) %>%
+    pivot_longer(
+        ends_with("E"),
+        names_to = "name",
+        values_to = "estimate"
+      ) %>%
+    left_join(
+        acs_vars_2019_5yr %>% 
+          select(name, label)
+      ) %>% 
+      select(-name) %>% 
+      separate(
+        label,
+        into = c(NA,NA,NA,"healthcare"),
+        sep = "!!"
+      ) %>% 
+      filter(!is.na(healthcare)) %>% 
+      mutate(race = census_race_categories[x])
+  })
+
+#Create a "duplicate" of bay_hc_race for future use
+bay_hc_race_data <- bay_hc_race
+
+#Organize healthcare coverage data by racial groups
+bay_race <-
+  bay_hc_race %>% 
+  group_by(race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  mutate(healthcare = "Total")
+
+#Create equity analysis
+bay_hc_race %>% 
+  group_by(healthcare, race) %>% 
+  summarize(estimate = sum(estimate)) %>% 
+  rbind(bay_race) %>% 
+  ggplot() +
+  geom_bar(
+    aes(
+      x = healthcare %>% factor(levels = rev(c("Total",unique(bay_hc_race$healthcare)))),
+      y = estimate,
+      fill = race %>% factor(levels = rev(unique(bay_hc_race$race)))
+    ),
+    stat = "identity",
+    position = "fill"
+  ) +
+  labs(
+    x = "Healthcare coverage",
+    y = "Proportion of Bay Area population",
+    title = "Bay Area healthcare coverage by race",
+    fill = "Race of individual"
+  ) +
+  coord_flip() +
+  theme(
+    legend.position = "bottom",
+    legend.direction = "vertical"
+  )  +
+  guides(
+    fill = guide_legend(
+      reverse = T
+    )
+  )
+```
+
+#PART 2: Mapping healthcare access in the Bay Area by race using census data
+
+Percent of peolpe with healthcare coverage
+```{r}
+#Taking census tract data to find percent of white and nonwhite people with helathcare in the Bay Area
+
+ca_tracts <- tracts("CA", cb = T, progress_bar = F) %>%
+  mutate(GEO_ID = AFFGEOID) %>%
+  select(GEO_ID, geometry)
+
+#Summarize census tract data by race and healthcare
+bay_hc_race_data <- bay_hc_race_data %>%
+    group_by(GEO_ID, race, healthcare) %>% 
+  summarize(estimate = sum(estimate))
+
+#Find total number of people by race in each Census tract
+bay_tract_race <- bay_hc_race_data %>%
+  group_by(GEO_ID, race) %>%
+  summarize(TOTAL = sum(estimate))
+
+#Select only healthcare data for white populations and calculate percent with healthcare
+bay_hc_white <- bay_hc_race_data %>%
+  filter(race == "White Alone", healthcare == "With health insurance coverage") %>%
+  left_join(bay_tract_race) %>%
+  mutate(PERCENT = estimate *100 / TOTAL) %>%
+  left_join(ca_tracts)
+
+#Select only healthcare data for nonwhite populations and calculate percent with healthcare
+bay_hc_nonwhite <- bay_hc_race_data %>%
+  filter(race != "White Alone", healthcare == "With health insurance coverage") %>%
+  left_join(bay_tract_race) %>%
+  group_by(GEO_ID) %>%
+  summarize(estimate = sum(estimate), TOTAL = sum(TOTAL)) %>%
+  mutate(PERCENT = estimate * 100 / TOTAL) %>%
+  left_join(ca_tracts)
+
+bay_hc_pal <- colorNumeric(
+  palette = "Blues",
+  domain = bay_hc_nonwhite$PERCENT
+)
+
+leaflet(bay_hc_white) %>%
+  addTiles() %>% 
+  addPolygons(
+    data = bay_hc_white$geometry,
+    fillColor = bay_hc_pal(bay_hc_white$PERCENT),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = paste0(
+      round(bay_hc_white$PERCENT), 
+      "% white households with health insurance coverage"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    ),
+    group = "white"
+  ) %>%
+  addPolygons(
+    data = bay_hc_nonwhite$geometry,
+    fillColor = bay_hc_pal(bay_hc_nonwhite$PERCENT),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = paste0(
+      round(bay_hc_nonwhite$PERCENT), 
+      "% white households with health insurance coverage"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    ),
+    group = "nonwhite"
+  ) %>%
+  addLegend(
+    data = bay_hc_nonwhite,
+    pal = bay_hc_pal,
+    values = bay_hc_nonwhite$PERCENT,
+    title = "% households with health insurance coverage"
+  ) %>%
+  addLayersControl(
+    baseGroups = c("white", "nonwhite"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+```
+
+Difference between percent of white peolpe and percent of nonwhite people with healthcare coverage
+```{r}
+#Mapping percent difference in white and nonwhite people with health insurance in Bay Area census tracts
+
+diff_hc_tract_race <-
+  bay_hc_white %>%
+  select(GEO_ID, PERCENT, geometry) %>%
+  left_join(bay_hc_nonwhite %>% mutate(PERCENT_NW = PERCENT) %>% select(-PERCENT)) %>%
+  mutate(DIFF = PERCENT - PERCENT_NW) %>%
+  select(-PERCENT,-PERCENT_NW,-race,-estimate,-TOTAL)
+
+diff_pal <- colorNumeric(
+  palette = "PiYG",
+  domain = diff_hc_tract_race$DIFF
+)
+
+leaflet() %>%
+  addTiles() %>% 
+  addPolygons(
+    data = diff_hc_tract_race$geometry,
+    fillColor = diff_pal(diff_hc_tract_race$DIFF),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = paste0(
+      round(diff_hc_tract_race$DIFF), 
+      "% difference in percent of white and nonwhite households with health insurance"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = diff_hc_tract_race,
+    pal = diff_pal,
+    values = diff_hc_tract_race$DIFF,
+    title = "difference in % white and nonwhite households with health insurance"
+  )
+```
+
+```{r}
+# I DON'T THINK THIS CODE CHUNK DOES ANYTHING RELEVANT
+
+# bay_county_race <-
+#   bay_hc_race_data %>% 
+#   group_by(GEO_ID, race) %>% 
+#   summarize(Total = sum(estimate)) %>% 
+#   mutate(healthcare = "Total")
+# 
+# bay_county_white <- bay_county_race %>%
+#   filter(race == "White Alone")
+# 
+# bay_county_nonwhite <- bay_county_race %>%
+#   filter(race != "White Alone") %>%
+#   group_by(GEO_ID) %>% 
+#   summarize(estimate = sum(estimate))
+# 
+# bay_hc_race_data <- bay_hc_race_data %>%
+#   group_by(healthcare, race, GEO_ID) %>% 
+#   summarize(estimate = sum(estimate))
+# 
+# bay_hc_white <- bay_hc_race_data %>%
+#   filter(race == "White Alone") %>%
+#   filter(healthcare == "With health insurance coverage") %>%
+#   left_join(
+#     bay_county_white %>%
+#       select(Total)
+#   ) %>%
+#   mutate(estimate = estimate / Total) %>%
+#   select(-Total)
+```
+
+
+#PART 3: Analyzing cardiovascular disease prevelance and its relation to environmental health risk exposure using CalEnviroScreen data 
+```{r}
+#This part utilizes CalEnviroScreen data
+
+#Load CalEnviroScreen data
+ces4 <- read_excel("calenviroscreen40resultsdatadictionary_F_2021.xlsx")
+
+ca_tracts <- tracts("CA", cb = T, progress_bar = F)
+
+#Filter to the Bay Area
+ces4_bay_data <-
+  ces4 %>% 
+  filter(`California County` %in% bay_county_names) %>% 
+  select(`Census Tract`, 'California County', "Pesticides", "Drinking Water", "PM2.5", "Cardiovascular Disease") %>% 
+  left_join(
+    ca_tracts %>% 
+      transmute(GEOID = as.numeric(GEOID)), 
+    by = c("Census Tract" = "GEOID")
+  ) %>% 
+  st_as_sf()
+
+#Filter to Marin County specifically.
+# ces4_marin_data <-
+#   ces4 %>% 
+#   filter(`California County` == "Marin") %>% 
+#   select(`Census Tract`, 'California County', "Pesticides", "Drinking Water", "PM2.5", "Cardiovascular Disease") %>% 
+#   left_join(
+#     ca_tracts %>% 
+#       transmute(GEOID = as.numeric(GEOID)), 
+#     by = c("Census Tract" = "GEOID")
+#   ) %>% 
+#    #mutate(
+#     # CVD = as.numeric(ces4_marin_data$"Cardiovascular Disease")
+#   # ) %>%
+#   st_as_sf()
+```
+
+
+```{r}
+#Mapping cardiovascular disease in Marin using
+# cvd_pal <- colorNumeric(
+#   palette = "Reds",
+#   domain = ces4_marin_data$'Cardiovascular Disease'
+# )
+# 
+# leaflet() %>% 
+#   addProviderTiles(providers$CartoDB.Positron) %>% 
+#   addPolygons(
+#     data = ces4_marin_data,
+#     fillColor = ~cvd_pal(ces4_marin_data$'Cardiovascular Disease'),
+#     color = "white",
+#     weight = 0.5,
+#     fillOpacity = 0.5,
+#     label = ~ces4_marin_data$'Cardiovascular Disease'
+#   )
+```
+For CalEnviroScreen purposes, cardiovascular disease is defined by "Spatially modeled, age-adjusted rate of emergency department (ED) visits for AMI per 10,000 (averaged over 2015-2017)." People without health insurance are probably less likely to visit the emergency room, even if they are in need. Which is why it would also be useful to map the greatest predictor. We should also compare the Bay Area map of CVD and percent of people with health insurance.
+
+Rates of cardiovascular disease in the Bay Area
+```{r}
+#Step 2: Mapping cardiovascular disease in the whole Bay Area
+cvd_bay_pal <- colorNumeric(
+  palette = "Reds",
+  domain = ces4_bay_data$'Cardiovascular Disease'
+)
+
+leaflet() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>% 
+  addPolygons(
+    data = ces4_bay_data,
+    fillColor = ~cvd_bay_pal(ces4_bay_data$'Cardiovascular Disease'),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = paste0(ces4_bay_data$'Cardiovascular Disease', " cardiovascular disease ER visits per 10,000 people")
+  ) 
+```
+
+Next, we will consider different enviornmental indicators as predictors of cardiovascular diease.
+
+Pesticides
+```{r}
+#Step 3: Create a regression analyzing pesticides as a predictor of cardiovascular disease
+ggplot(
+  data = ces4_bay_data,
+  aes(
+      x = Pesticides,
+      y = log(ces4_bay_data$"Cardiovascular Disease")
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+```{r}
+model1 <- lm(log(ces4_bay_data$"Cardiovascular Disease") ~ Pesticides, ces4_bay_data)
+
+summary(model1)
+```
+
+```{r}
+plot(density(residuals(model1)))
+```
+The mean of the residuals is close to zero and curve is fairly symmetric.
+R squared is quite low (variation in pesticides only explains .66% of variation in cardiovascular disease).
+
+Takeaway: pesticides are a poor predictor of cardiovascular disease
+
+Drinking water quality
+```{r}
+#Step 4: Create a regression analyzing drinking water as a predictor of cardiovascular disease
+ggplot(
+  data = ces4_bay_data,
+  aes(
+      x = ces4_bay_data$"Drinking Water",
+      y = ces4_bay_data$"Cardiovascular Disease"
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+```{r}
+model2 <- lm(ces4_bay_data$"Cardiovascular Disease" ~ ces4_bay_data$"Drinking Water", ces4_bay_data)
+
+summary(model2)
+```
+
+```{r}
+plot(density(residuals(model2)))
+```
+The residuals are somewhat symetrially distributed around zero if you look at summary alone, but plot shows that curve is skewed.
+R squared still quite low, variation in drinking water only explains 1.15% of variation in cardiovascular disease
+
+PM2.5
+```{r}
+#Step 5: Create a regression analyzing PM2.5  as a predictor of cardiovascular disease
+ggplot(
+  data = ces4_bay_data,
+  aes(
+      x = ces4_bay_data$"PM2.5",
+      y = log(ces4_bay_data$"Cardiovascular Disease")
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+```{r}
+model3 <- lm(log(ces4_bay_data$"Cardiovascular Disease") ~ ces4_bay_data$"PM2.5", ces4_bay_data)
+summary(model3)
+```
+
+```{r}
+plot(density(residuals(model3)))
+```
+Residuals are centered at zero and relatively symetric.
+R squared is low, variation in PM2.5 only explains 1.17% of variation in cardiovascular disease
+
+From this, we see that the best predictor is PM2.5, but it is still a very weak predictor.
+
+```{r}
+# ces4_bay_residuals <-
+#   ces4_bay_data %>% 
+#   mutate(Residuals = model3$residuals) %>%
+#   na.omit(ces4_bay_data) %>%
+#   st_as_sf()
+```
+
+```{r}
+# Mapping residuals of PM2.5 as a predictor of cardiovascular disease
+
+
+# residuals_pal <- colorNumeric(
+#   palette = "Reds",
+#   domain = model3$Residuals
+# )
+# leaflet() %>% 
+#   addProviderTiles(providers$CartoDB.Positron) %>% 
+#   addPolygons(
+#     data = ces4_bay_residuals,
+#     fillColor = ~residuals_pal(Residuals),
+#     color = "white",
+#     weight = 0.5,
+#     fillOpacity = 0.5,
+#     label = ~Residuals
+#   ) %>%
+#   addLegend(
+#     data = ces4_bay_residuals,
+#     pal = residuals_pal,
+#     values = ces4_bay_residuals$Residuals,
+#     title = "PM2.5 residuals"
+#   )
+
+# A negative residual suggests that our regression model is over-estimating the rates of cardiovascular disease given the concentrations of PM2.5 in these areas. The lowest residuals occur in dense parts of the Bay, such as downtown San Francisco and Berkeley This suggests that in these areas there are other factors that are better predictors of cardiovascular disease than PM2.5.
+
+```
+
+
+#NOT SURE THAT I WILL INCLUDE THIS PART (Not sure how to tie it in to the reset of the project, but I have the code so wanted to include it for now)
+PART 4: Mapping private health insurance coverage by white immigrant and non-white immigrant populations in the Bay Area 
+
+Out of interest, I used PUMS data to look at the intersecting identities of race and immigration status, and how this may relate to health insurance in the Bay Area.
+```{r}
+#This part utilizes PUMS data to map healthcare coverage based on race and immigration status
+
+# temp <- tempfile()
+# download.file("https://www2.census.gov/programs-surveys/acs/data/pums/2019/1-Year/csv_hca.zip",destfile = temp)
+# 
+# pums_hca_2019_1yr <- read_csv(unzip(temp,"psam_h06.csv"))
+# 
+# unlink(temp)
+
+#Load PUMS data with variables for race, private health insurance coverage, and public health insurance coverage
+# pums_2019_1yr <- getCensus(
+#   name = "acs/acs1/pums",
+#   vintage = 2019,
+#   region = "public use microdata area:*",
+#   regionin = "state:06",
+#   vars = c(
+#     "SERIALNO",
+#     "SPORDER",
+#     "PWGTP",
+#     "WGTP",
+#     "RAC1P",
+#     "CIT",
+#     "PRIVCOV",
+#     "PUBCOV"
+#   )
+# )
+# 
+# saveRDS(pums_2019_1yr, "final_pums.rds")
+pums_2019_1yr <- readRDS("final_pums.rds")
+
+ca_pumas <-
+  pumas("CA", cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+#Create dataframe of Bay Area counties with spatial data
+bay_counties <-
+  counties("CA", cb = T, progress_bar = F) %>%
+  filter(NAME %in% bay_county_names)
+
+#Filter PUMAS data to Bay Area counties
+bay_pumas <-
+  ca_pumas %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_drop_geometry() %>% 
+  left_join(ca_pumas %>% select(GEOID10)) %>% 
+  st_as_sf()
+
+#Filter PUMS data to Bay Area counties
+bay_pums <-
+  pums_2019_1yr %>% 
+  mutate(
+    PUMA = str_pad(public_use_microdata_area,5,"left","0")
+  ) %>% 
+  filter(PUMA %in% bay_pumas$PUMACE10)
+```
+```{r}
+#Percent of households with health insurance coverage in Bay Area PUMAS
+
+#Step 1: Mapping total households with health insurance coverage
+
+# total_hc <-
+#   bay_pums %>% 
+#   filter(!duplicated(SERIALNO)) %>% 
+#   mutate(
+#     WGTP = as.numeric(WGTP),
+#     specific_population = ifelse(
+#       (PRIVCOV == 1),
+#       # (PRIVCOV == 1) |
+#       # (PUBCOV == 1),
+#       WGTP,
+#       0
+#     )
+#   ) %>% 
+#   group_by(PUMA) %>% 
+#   summarize(
+#     perc_specific_population =
+#       sum(specific_population, na.rm =T)/sum(WGTP, na.rm = T)*100
+#   ) %>% 
+#   left_join(
+#     bay_pumas %>% 
+#       select(PUMACE10),
+#     by = c("PUMA" = "PUMACE10")
+#   ) %>% 
+#   st_as_sf()
+# 
+# total_pums_pal <- colorNumeric(
+#   palette = "Blues",
+#   domain = total_hc$perc_specific_population
+# )
+# 
+# leaflet() %>%
+#   addTiles() %>% 
+#   addPolygons(
+#     data = total_hc,
+#     fillColor = ~total_pums_pal(perc_specific_population),
+#     color = "white",
+#     opacity = 0.5,
+#     fillOpacity = 0.5,
+#     weight = 1,
+#     label = ~paste0(
+#       round(perc_specific_population), 
+#       "% households with health insurance coverage"
+#     ),
+#     highlightOptions = highlightOptions(
+#       weight = 2,
+#       opacity = 1
+#     )
+#   ) %>% 
+#   addLegend(
+#     data = total_hc,
+#     pal = total_pums_pal,
+#     values = ~perc_specific_population,
+#     title = "% households with health insurance coverage"
+#   ) 
+```
+
+
+
+```{r}
+#Step 2: Finding percentages of white and nonwhite immigrant households with private health insurance coverage
+
+w_hc <-
+  bay_pums %>% 
+  filter(!duplicated(SERIALNO)) %>% 
+  mutate(
+    WGTP = as.numeric(WGTP),
+    white_pop = ifelse(
+      (RAC1P == 1) &
+      (CIT != 1),
+      WGTP,
+      0
+    ),
+    w_hc_pop = ifelse(
+      (RAC1P == 1) & #Race is white alone
+      (CIT != 1) & #Was not born in the US
+      (PRIVCOV == 1), #Has private health insurance
+      # ((PRIVCOV == 1) | #Has private or public health insurance
+      # (PUBCOV == 1)),
+      WGTP,
+      0
+    )
+  ) %>% 
+  group_by(PUMA) %>% 
+  summarize(
+    perc_specific_pop =
+      sum(w_hc_pop, na.rm =T)/sum(white_pop, na.rm = T)*100
+  ) %>% 
+  left_join(
+    bay_pumas %>% 
+      select(PUMACE10),
+    by = c("PUMA" = "PUMACE10")
+  ) %>% 
+  st_as_sf()
+
+nw_hc <-
+  bay_pums %>% 
+  filter(!duplicated(SERIALNO)) %>% 
+  mutate(
+    WGTP = as.numeric(WGTP),
+    nonwhite_pop = ifelse(
+      (RAC1P != 1)&
+      (CIT != 1),
+      WGTP,
+      0
+    ),
+    nw_hc_pop = ifelse(
+      (RAC1P != 1) & #Race is white alone
+      (CIT != 1) & #Was not born in the US
+      (PRIVCOV == 1), #Has private health insurance
+      # ((PRIVCOV == 1) | #Has private or public health insurance
+      # (PUBCOV == 1)),
+      WGTP,
+      0
+    )
+  ) %>% 
+  group_by(PUMA) %>% 
+  summarize(
+    perc_specific_pop =
+      sum(nw_hc_pop, na.rm =T)/sum(nonwhite_pop, na.rm = T)*100
+  ) %>% 
+  left_join(
+    bay_pumas %>% 
+      select(PUMACE10),
+    by = c("PUMA" = "PUMACE10")
+  ) %>% 
+  st_as_sf()
+
+race_pums_pal <- colorNumeric(
+  palette = "Oranges",
+  domain = nw_hc$perc_specific_pop
+)
+
+# leaflet() %>%
+#   addTiles() %>% 
+#   addPolygons(
+#     data = w_hc,
+#     fillColor = ~race_pums_pal(perc_specific_pop),
+#     color = "white",
+#     opacity = 0.5,
+#     fillOpacity = 0.5,
+#     weight = 1,
+#     label = ~paste0(
+#       round(perc_specific_pop), 
+#       "% white immigrant households with health insurance coverage"
+#     ),
+#     highlightOptions = highlightOptions(
+#       weight = 2,
+#       opacity = 1
+#     )
+#   ) %>% 
+#   addLegend(
+#     data = w_hc,
+#     pal = race_pums_pal,
+#     values = ~perc_specific_pop,
+#     title = "% white immigrant households with health insurance coverage"
+#   )
+```
+
+Percent of white and non-white households with health insurance coverage in Bay Area PUMAS
+```{r}
+#Mapping non-white households with health insurance coverage
+
+# leaflet() %>%
+#   addTiles() %>% 
+#   addPolygons(
+#     data = nw_hc,
+#     fillColor = ~race_pums_pal(perc_specific_pop),
+#     color = "white",
+#     opacity = 0.5,
+#     fillOpacity = 0.5,
+#     weight = 1,
+#     label = ~paste0(
+#       round(perc_specific_pop), 
+#       "% non-white immigrant households with health insurance coverage"
+#     ),
+#     highlightOptions = highlightOptions(
+#       weight = 2,
+#       opacity = 1
+#     )
+#   ) %>% 
+#   addLegend(
+#     data = nw_hc,
+#     pal = race_pums_pal,
+#     values = ~perc_specific_pop,
+#     title = "% non-white immigrant households with health insurance coverage"
+#   )
+```
+
+```{r}
+#Step 3: Mapping white and nonwhite immigrant households with private health insurance
+leaflet() %>%
+  addTiles() %>% 
+  addPolygons(
+    data = w_hc,
+    fillColor = ~race_pums_pal(perc_specific_pop),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(perc_specific_pop), 
+      "% white immigrant households with private health insurance"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1,
+    ),
+    group = "white"
+  ) %>% 
+  addPolygons(
+    data = nw_hc,
+    fillColor = ~race_pums_pal(perc_specific_pop),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(perc_specific_pop), 
+      "% non-white immigrant households with private health insurance"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1,
+    ),
+    group = "nonwhite"
+  ) %>% 
+  addLegend(
+    data = nw_hc,
+    pal = race_pums_pal,
+    values = ~perc_specific_pop,
+    title = "% households with private health insurance",
+  ) %>%
+  addLayersControl(
+    baseGroups = c("white", "nonwhite"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+```
+
+Difference between the percent of white and non-white households with health insurance coverage in Bay Area PUMAS
+```{r}
+#Step 4: Finding and mapping the difference between %white households and %nonwhite households with private health insurance coverage
+
+diff_hc_by_race <-
+  w_hc %>%
+  mutate(DIFF = perc_specific_pop - nw_hc$perc_specific_pop) %>%
+  select(-perc_specific_pop)
+
+diff_pal <- colorNumeric(
+  palette = "PiYG",
+  domain = diff_hc_by_race$DIFF
+)
+
+leaflet() %>%
+  addTiles() %>% 
+  addPolygons(
+    data = diff_hc_by_race,
+    fillColor = ~diff_pal(DIFF),
+    color = "white",
+    opacity = 0.5,
+    fillOpacity = 0.5,
+    weight = 1,
+    label = ~paste0(
+      round(DIFF), 
+      "% difference in number of white and nonwhite households"
+    ),
+    highlightOptions = highlightOptions(
+      weight = 2,
+      opacity = 1
+    )
+  ) %>% 
+  addLegend(
+    data = diff_hc_by_race,
+    pal = diff_pal,
+    values = ~DIFF,
+    title = "difference in % white and nonwhite households with private health insurance"
+  )
+```
+
+```{r}
+#Sum differences in PUMAS to the county level
+
+#Keep only first 3 digits of PUMA codes (FIPS codes)
+diff_hc_by_race$PUMA <- substr(diff_hc_by_race$PUMA, 0, 3)
+
+#Take the mean difference between percent white and non-white households with health insurance in each county
+hc_by_race_avg <- diff_hc_by_race %>%
+  st_set_geometry(NULL) %>%
+  mutate(COUNTYFP = PUMA) %>%
+  select(-PUMA) %>%
+  group_by(COUNTYFP) %>%
+  summarize(mean = mean(DIFF))
+```
+Averaging across PUMAs, we see that the discrepancy between the percent of white and non-white households with private health insurance is greatest in Sonoma County. 
