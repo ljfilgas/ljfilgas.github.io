@@ -6,7 +6,11 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = F, warning = F, message = F)
 ```
+# Exploring the links between environmental quality, health insurance acces, race, and rates of cardiovascular disease
 
+Over the past decade, health insurance, and specifically whether the government should provide single-payer healthcare, has been a major topic of political debate. In the US, medical expenses are a primary cause of bankruptcy (Himmelstein 2019). Access to affordable healthcare is a major determinant of an individual’s wellbeing, particularly if they may have preexisting conditions, exposures, or vulnerabilities that make them more susceptible to illness or make recovering from setbacks more difficult. Right now, there are many people in the US and within the Bay Area that do not have health insurance. Particularly during a global pandemic, this makes certain populations particularly vulnerable. In addition to lack of healthcare coverage, environmental contaminants that communities are exposed to can put them at increased vulnerability to illness. In the United States, heart disease is a leading cause of death, and has been for the past decade (Healthline 2018). Environmental causes of heart disease include particulate air pollution, pesticides, and metals that may appear in drinking water (Cosselman 2015).
+
+Here I will explore how health insurance coverage varies for different demographic groups in the Bay Area, specifically for populations of different races. I will then study potential environmental determinants of cardiovascular disease, specifically pesticide exposure, water quality, and PM2.5 exposure, to determine which indicator is the best predictor of cardiovascular disease.
 ```{r}
 library(tidyverse)
 library(censusapi)
@@ -15,6 +19,8 @@ library(mapview)
 library(tigris)
 library(readxl)
 library(leaflet)
+library(corrplot)
+library(data.table)
 
 Sys.setenv(CENSUS_KEY="c8aa67e4086b4b5ce3a8717f59faa9a28f611dab")
 
@@ -38,7 +44,8 @@ bay_county_names <-
     "Sonoma"
   )
 ```
-#PART 1: Equity Analysis of Health Insurance Coverage in the Bay Area
+
+# PART 1: Equity Analysis of Health Insurance Coverage in the Bay Area
 ```{r}
 #Load healthcare coverage census data and create a dataframe organized by race 
 
@@ -129,10 +136,12 @@ bay_hc_race %>%
     )
   )
 ```
+From this, we can see that as a whole across the nine counties in the Bay Area, white individuals have a disproportionately low likelihood of not having health insurance. Interestingly, the only other group that appears to be significantly disproportionately represented is the population of "some other race alone," which is disproportionately more likely to not have health insurance. Some might say that there is, generally, equity in health insurance coverage. However, true equity might look like all individuals having healthcare. 
 
-#PART 2: Mapping healthcare access in the Bay Area by race using census data
+# PART 2: Mapping healthcare access in the Bay Area by race using census data
+Mapping healthcare coverage will help us understand how equity in coverage varies over space.
 
-Percent of peolpe with healthcare coverage
+Percent of white and non-white people with healthcare coverage in the Bay Area
 ```{r}
 #Taking census tract data to find percent of white and nonwhite people with helathcare in the Bay Area
 
@@ -172,7 +181,7 @@ bay_hc_pal <- colorNumeric(
 )
 
 leaflet(bay_hc_white) %>%
-  addTiles() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
   addPolygons(
     data = bay_hc_white$geometry,
     fillColor = bay_hc_pal(bay_hc_white$PERCENT),
@@ -218,8 +227,9 @@ leaflet(bay_hc_white) %>%
     options = layersControlOptions(collapsed = FALSE)
   )
 ```
+As we can see, the percent of households with health insurance is fairly high in both demographic groups, with the majority of Census Tracts averaging about 90%. To get a better understanding of how the two groups vary, we can map the difference between the percent of white people and the percent of non-white people with healthcare.
 
-Difference between percent of white peolpe and percent of nonwhite people with healthcare coverage
+Difference between percent of white people and percent of nonwhite people with healthcare coverage
 ```{r}
 #Mapping percent difference in white and nonwhite people with health insurance in Bay Area census tracts
 
@@ -231,12 +241,12 @@ diff_hc_tract_race <-
   select(-PERCENT,-PERCENT_NW,-race,-estimate,-TOTAL)
 
 diff_pal <- colorNumeric(
-  palette = "PiYG",
+  palette = "RdYlBu",
   domain = diff_hc_tract_race$DIFF
 )
 
 leaflet() %>%
-  addTiles() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
   addPolygons(
     data = diff_hc_tract_race$geometry,
     fillColor = diff_pal(diff_hc_tract_race$DIFF),
@@ -260,41 +270,14 @@ leaflet() %>%
     title = "difference in % white and nonwhite households with health insurance"
   )
 ```
+This map shows that the majority of land area falls in census tracts with a slightly negative difference, meaning that a greater proportion of non-white people than white people have healthcare. However, in the areas where more white people have healthcare, the inequity tends to be greater, reaching close to a 30% difference in some areas. Additional mapping and data could be useful in understanding why the map looks this way, but overall it suggests that maybe there is not a strong correlation between race and whether or not an individual has healthcare in large parts of the Bay Area. 
 
-```{r}
-# I DON'T THINK THIS CODE CHUNK DOES ANYTHING RELEVANT
+It is also important to interpret this map with the context of the equity analysis, which showed, as a whole, white people were less likely not to have healthcare. The map suggests that this regional inequity in healthcare coverage is driven by local inequity that is concentrated in small pockets, and in those areas the issue is quite pronounced. 
 
-# bay_county_race <-
-#   bay_hc_race_data %>% 
-#   group_by(GEO_ID, race) %>% 
-#   summarize(Total = sum(estimate)) %>% 
-#   mutate(healthcare = "Total")
-# 
-# bay_county_white <- bay_county_race %>%
-#   filter(race == "White Alone")
-# 
-# bay_county_nonwhite <- bay_county_race %>%
-#   filter(race != "White Alone") %>%
-#   group_by(GEO_ID) %>% 
-#   summarize(estimate = sum(estimate))
-# 
-# bay_hc_race_data <- bay_hc_race_data %>%
-#   group_by(healthcare, race, GEO_ID) %>% 
-#   summarize(estimate = sum(estimate))
-# 
-# bay_hc_white <- bay_hc_race_data %>%
-#   filter(race == "White Alone") %>%
-#   filter(healthcare == "With health insurance coverage") %>%
-#   left_join(
-#     bay_county_white %>%
-#       select(Total)
-#   ) %>%
-#   mutate(estimate = estimate / Total) %>%
-#   select(-Total)
-```
+Next, we will bring in data from CalEnviroScreen to look at the interplay between healthcare coverage and risk of cardiovascular disease.
 
 
-#PART 3: Analyzing cardiovascular disease prevelance and its relation to environmental health risk exposure using CalEnviroScreen data 
+# PART 3: Analyzing cardiovascular disease prevelance and its relation to environmental health risk exposure 
 ```{r}
 #This part utilizes CalEnviroScreen data
 
@@ -314,43 +297,9 @@ ces4_bay_data <-
     by = c("Census Tract" = "GEOID")
   ) %>% 
   st_as_sf()
-
-#Filter to Marin County specifically.
-# ces4_marin_data <-
-#   ces4 %>% 
-#   filter(`California County` == "Marin") %>% 
-#   select(`Census Tract`, 'California County', "Pesticides", "Drinking Water", "PM2.5", "Cardiovascular Disease") %>% 
-#   left_join(
-#     ca_tracts %>% 
-#       transmute(GEOID = as.numeric(GEOID)), 
-#     by = c("Census Tract" = "GEOID")
-#   ) %>% 
-#    #mutate(
-#     # CVD = as.numeric(ces4_marin_data$"Cardiovascular Disease")
-#   # ) %>%
-#   st_as_sf()
 ```
 
-
-```{r}
-#Mapping cardiovascular disease in Marin using
-# cvd_pal <- colorNumeric(
-#   palette = "Reds",
-#   domain = ces4_marin_data$'Cardiovascular Disease'
-# )
-# 
-# leaflet() %>% 
-#   addProviderTiles(providers$CartoDB.Positron) %>% 
-#   addPolygons(
-#     data = ces4_marin_data,
-#     fillColor = ~cvd_pal(ces4_marin_data$'Cardiovascular Disease'),
-#     color = "white",
-#     weight = 0.5,
-#     fillOpacity = 0.5,
-#     label = ~ces4_marin_data$'Cardiovascular Disease'
-#   )
-```
-For CalEnviroScreen purposes, cardiovascular disease is defined by "Spatially modeled, age-adjusted rate of emergency department (ED) visits for AMI per 10,000 (averaged over 2015-2017)." People without health insurance are probably less likely to visit the emergency room, even if they are in need. Which is why it would also be useful to map the greatest predictor. We should also compare the Bay Area map of CVD and percent of people with health insurance.
+For CalEnviroScreen purposes, rate of cardiovascular disease is measured as "Spatially modeled, age-adjusted rate of emergency department (ED) visits for AMI per 10,000 (averaged over 2015-2017)." It is important to recognize that people without health insurance are probably less likely to visit the emergency room, even if they are in need, which makes this a somewhat unreliable measure of cardiovascular disease rates, especially for the analysis we are doing here.
 
 Rates of cardiovascular disease in the Bay Area
 ```{r}
@@ -371,38 +320,82 @@ leaflet() %>%
     label = paste0(ces4_bay_data$'Cardiovascular Disease', " cardiovascular disease ER visits per 10,000 people")
   ) 
 ```
+Some of the highest rates exist in the East Bay, specifically around Hayward, Richmond, and Vallejo, as well as further inland near Antioch and Fairfield. 
 
-Next, we will consider different enviornmental indicators as predictors of cardiovascular diease.
+Next, we will consider different enviornmental indicators as predictors of cardiovascular disease.
 
-Pesticides
+```{r}
+#Run a multiple regression
+
+outlierReplace = function(dataframe, cols, rows, newValue = NA) {
+    if (any(rows)) {
+        set(dataframe, rows, cols, newValue)
+    }
+}
+
+outlierReplace(ces4_bay_data, "Pesticides", which(ces4_bay_data$Pesticides > 
+    2000), NA)
+  
+correlationplot <- ces4_bay_data %>%
+  select(
+    "Pesticides",
+    "Drinking Water",
+    "PM2.5",
+    "Cardiovascular Disease"
+  ) %>%
+  st_drop_geometry() %>%
+  drop_na(c("Pesticides",
+    "Drinking Water",
+    "PM2.5",
+    "Cardiovascular Disease")) %>%
+  cor()
+
+corrplot(
+  correlationplot, 
+  method = "number",
+  type = "upper"
+)
+```
+
+Positive values indicate that increases in one variable are associated with increases in the other. So, increases in pesticide concentrations are associated with increases in drinking water contaminants, and increases in PM2.5 are  associated with increases in cardiovascular disease. Negative values show the opposite. Increases in drinking water contaminants and increases in pesticide concentrations are associated with decreases in PM2.5 concentrations From this data, we can see that for all indicators, a cleaner and healthier environment (low pesticides, low PM2.5, better drinking water) is associated with reduced rates of cardiovascular disease.
+
+# Pesticides
+Indicator definition: Total pounds of 83 selected active pesticide ingredients (filtered for hazard and volatility) used in production-agriculture per square mile, averaged over three years (2016 to 2018). 
 ```{r}
 #Step 3: Create a regression analyzing pesticides as a predictor of cardiovascular disease
+
 ggplot(
   data = ces4_bay_data,
   aes(
       x = Pesticides,
-      y = log(ces4_bay_data$"Cardiovascular Disease")
+      y = ces4_bay_data$"Cardiovascular Disease"
     )
 ) +
   geom_point() +
   geom_smooth(method = "lm")
 ```
 
+There appears to be a slight corrleation between higher concentrations of pesticides and higher rates of cardiovascular disease.
+
 ```{r}
-model1 <- lm(log(ces4_bay_data$"Cardiovascular Disease") ~ Pesticides, ces4_bay_data)
+model1 <- lm(ces4_bay_data$"Cardiovascular Disease" ~ Pesticides, ces4_bay_data)
 
 summary(model1)
 ```
 
+The R squared value is quite low. Variation in pesticides only explains 0.51% of variation in cardiovascular disease. There is a slightly positive correlation between the two indicators (slope of 0.003822 with standard error 0.001339). The p-value of 0.00436 is below 0.05, meaning the results are statistically significant.
+
 ```{r}
 plot(density(residuals(model1)))
 ```
+
 The mean of the residuals is close to zero and curve is fairly symmetric.
-R squared is quite low (variation in pesticides only explains .66% of variation in cardiovascular disease).
 
-Takeaway: pesticides are a poor predictor of cardiovascular disease
+Because the R squared is so low, we can conclude that pesticides are a poor predictor of cardiovascular disease.
 
-Drinking water quality
+
+# Drinking water contaminants
+Indicator definition: Drinking water contaminant index for selected contaminants, 2011 to 2019
 ```{r}
 #Step 4: Create a regression analyzing drinking water as a predictor of cardiovascular disease
 ggplot(
@@ -416,19 +409,27 @@ ggplot(
   geom_smooth(method = "lm")
 ```
 
+Here there appears to be a negative correlation between drinking water contaminants and cardiovascular disease.
+
 ```{r}
 model2 <- lm(ces4_bay_data$"Cardiovascular Disease" ~ ces4_bay_data$"Drinking Water", ces4_bay_data)
 
 summary(model2)
 ```
 
+The R squared for drinking water is higher than that for pesticides at 0.011. This means that variation in drinking water contaminants explains explains 1.15% of variation in cardiovascular disease. The slope is -0.0034656 with a standard error of 0.0008067, which is much lower than for pesticides, confirming that this is a better predictor of cardiovascular disease. The p-value is 1.85e-05, again making these results statistically significant.
+
+So while this regression is a better fit than the regression with pesticides, meaning that drinking water quality is a better predictor of cardiovascular disease, the correlation between the two indicators, as shown by R squared, is still quite low.
+
 ```{r}
 plot(density(residuals(model2)))
 ```
-The residuals are somewhat symetrially distributed around zero if you look at summary alone, but plot shows that curve is skewed.
-R squared still quite low, variation in drinking water only explains 1.15% of variation in cardiovascular disease
 
-PM2.5
+The residuals are somewhat symetrially distributed around zero if you look at summary alone, but plot shows that curve is skewed.
+
+
+# PM2.5
+Indicator definition: Annual mean concentration of PM2.5 (weighted average of measured monitor concentrations and satellite observations, µg/m3), over three years (2015 to 2017). 
 ```{r}
 #Step 5: Create a regression analyzing PM2.5  as a predictor of cardiovascular disease
 ggplot(
@@ -442,18 +443,22 @@ ggplot(
   geom_smooth(method = "lm")
 ```
 
+There is a positive correlation between PM2.5 concentrations and rates of cardiovascular disease.
+
 ```{r}
 model3 <- lm(log(ces4_bay_data$"Cardiovascular Disease") ~ ces4_bay_data$"PM2.5", ces4_bay_data)
 summary(model3)
 ```
 
+This is the highest R squared so far, showing that variation in PM2.5 explains 1.17% of variation in cardiovascular disease. The p-value is the lowest of the three indicators at 1.54e-05, again statistically significant. 
+
 ```{r}
 plot(density(residuals(model3)))
 ```
-Residuals are centered at zero and relatively symetric.
-R squared is low, variation in PM2.5 only explains 1.17% of variation in cardiovascular disease
 
-From this, we see that the best predictor is PM2.5, but it is still a very weak predictor.
+Residuals are centered at zero and relatively symetric.
+
+From this, we see that PM2.5 is the best predictor of cardiovascular disease, but it is still a very weak predictor.
 
 ```{r}
 # ces4_bay_residuals <-
@@ -463,86 +468,226 @@ From this, we see that the best predictor is PM2.5, but it is still a very weak 
 #   st_as_sf()
 ```
 
+
+Now, instead of looking at environmental indicators, we can bring in our race and healthcare data from Part 2 and consider these variables as predictors of cardiovascular disease.
+
 ```{r}
-# Mapping residuals of PM2.5 as a predictor of cardiovascular disease
+bay_tract_pop <- bay_tract_race %>%
+  group_by(GEO_ID) %>%
+  summarize(SUM = sum(TOTAL))
 
+ca_tracts <- ca_tracts %>%
+  select(-"GEOID") %>%
+  mutate(GEO_ID = AFFGEOID)
 
-# residuals_pal <- colorNumeric(
-#   palette = "Reds",
-#   domain = model3$Residuals
-# )
-# leaflet() %>% 
-#   addProviderTiles(providers$CartoDB.Positron) %>% 
-#   addPolygons(
-#     data = ces4_bay_residuals,
-#     fillColor = ~residuals_pal(Residuals),
-#     color = "white",
-#     weight = 0.5,
-#     fillOpacity = 0.5,
-#     label = ~Residuals
-#   ) %>%
-#   addLegend(
-#     data = ces4_bay_residuals,
-#     pal = residuals_pal,
-#     values = ces4_bay_residuals$Residuals,
-#     title = "PM2.5 residuals"
-#   )
+bay_tract_nw <- bay_tract_race %>%
+  filter(race != "White Alone") %>%
+  group_by(GEO_ID) %>%
+  summarize(TOTAL = sum(TOTAL)) %>%
+  left_join(bay_tract_pop, by = "GEO_ID") %>%
+  mutate(PERCENT = TOTAL *100 / SUM) %>%
+  left_join(ca_tracts)
 
-# A negative residual suggests that our regression model is over-estimating the rates of cardiovascular disease given the concentrations of PM2.5 in these areas. The lowest residuals occur in dense parts of the Bay, such as downtown San Francisco and Berkeley This suggests that in these areas there are other factors that are better predictors of cardiovascular disease than PM2.5.
+bay_ces4_race <-
+  ces4_bay_data %>%
+  left_join(bay_tract_nw) %>%
+  na.omit(ces4_bay_data$PERCENT)
 
+ggplot(
+  data = bay_ces4_race,
+  aes(
+      x = bay_ces4_race$"PERCENT",
+      y = log(bay_ces4_race$"Cardiovascular Disease")
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+Here we see a positive correlation between the percent of non-white people in a tract and rates of cardiovascular disease.
+
+Here you can toggle between the percent of non-white people and rates of cardiovascular disease in each census tract.
+```{r}
+race_pal <- colorNumeric(
+  palette = "PuBu",
+  domain = bay_ces4_race$PERCENT
+)
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(
+    data = bay_ces4_race,
+    fillColor = ~race_pal(PERCENT),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = ~PERCENT,
+    group = "race"
+  ) %>%
+  addPolygons(
+    data = ces4_bay_data,
+    fillColor = ~cvd_bay_pal(ces4_bay_data$'Cardiovascular Disease'),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = paste0(ces4_bay_data$'Cardiovascular Disease', " cardiovascular disease ER visits per 10,000 people"),
+    group = "cardiovascular disease"
+  ) %>%
+  addLegend(
+    data = bay_ces4_race,
+    pal = race_pal,
+    values = bay_ces4_race$PERCENT,
+    title = "Percent of non-white individuals",
+    group = "race"
+  ) %>%
+  addLegend(
+    data = ces4_bay_data,
+    pal = cvd_bay_pal,
+    values = ces4_bay_data$"Cardiovascular Disease",
+    title = "Rate of cardiovascular disease",
+    group = "cardiovascular disease"
+  ) %>%
+   addLayersControl(
+    baseGroups = c("race", "cardiovascular disease"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
 ```
 
 
-#NOT SURE THAT I WILL INCLUDE THIS PART (Not sure how to tie it in to the reset of the project, but I have the code so wanted to include it for now)
-PART 4: Mapping private health insurance coverage by white immigrant and non-white immigrant populations in the Bay Area 
+```{r}
+model5 <- lm(bay_ces4_race$"Cardiovascular Disease" ~ bay_ces4_race$"PERCENT", bay_ces4_race)
 
-Out of interest, I used PUMS data to look at the intersecting identities of race and immigration status, and how this may relate to health insurance in the Bay Area.
+summary(model5)
+```
+
+The R squared here shows that variations in the percent of nonwhite people can explain 9.68% of variation in cardiovascular disease, making this the best predictor we've encountered so far. The slope of the correlation is 0.055, meaning that as the percent of nonwhite people increases, so does the rate of cardiovascular disease. We also see the lowest p-value yet, at 2.2e-16, which is statistically significant. 
+
+```{r}
+plot(density(residuals(model5)))
+```
+
+The takeaway from this is that race, and specifically the percent of non-white people in an area is better than pesticide concentration, drinking water contaminants, or PM2.5 concentrations at explaining variations in rates of cardiovascular disease.
+
+```{r}
+#Step 6: Create a regression analyzing healthcare as a predictor of cardiovascular disease
+bay_tract_hc <- bay_hc_race_data %>%
+  group_by(GEO_ID, healthcare) %>%
+  summarize(TOTAL = sum(estimate))
+
+bay_tract_nohc <- bay_tract_hc %>%
+  filter(healthcare == "No health insurance coverage") %>%
+  group_by(GEO_ID) %>%
+  summarize(TOTAL = sum(TOTAL)) %>%
+  left_join(bay_tract_pop) %>%
+  mutate(PERCENT = TOTAL *100 / SUM) %>%
+  left_join(ca_tracts)
+
+bay_ces4_hc <-
+  ces4_bay_data %>%
+  left_join(bay_tract_nohc) %>%
+  na.omit(ces4_bay_data$PERCENT)
+
+ggplot(
+  data = bay_ces4_hc,
+  aes(
+      x = bay_ces4_hc$"PERCENT",
+      y = bay_ces4_hc$"Cardiovascular Disease"
+    )
+) +
+  geom_point() +
+  geom_smooth(method = "lm")
+```
+
+Here we see a positive correlation between the percent of people without healthcare and the rate of cardiovascular disease.
+
+```{r}
+model4 <- lm(bay_ces4_hc$"Cardiovascular Disease" ~ bay_ces4_hc$"PERCENT", bay_ces4_hc)
+
+summary(model4)
+```
+
+Here we see an R squared higher than that for race. Variation in the percent of people without health insurance explains 13.89% of the variation in rates of cardiovascular disease. The slope of the correlation line is 0.40679, which is approximately eight times higher than the slope of the correlation between percent nonwhite individuals and cardiovascular disease. This means that a slight increase in the percent of people without health insurance leads to a significant increase in the rate of cardiovascular disease.
+
+Knowing that cardiovascular disease is measured by emergency room visits, we can imagine that the actual rate of people with cardiovascular disease but without health insurance might be even higher, making this a surprising finding and one of great interest for further exploration.
+
+```{r}
+plot(density(residuals(model4)))
+```
+
+
+Now, let's map the residuals of health insurance as a predictor of cardiovascular disease.
+```{r}
+ces4_bay_residuals <-
+  bay_ces4_hc %>%
+  mutate(Residuals = model4$residuals) %>%
+  na.omit(bay_ces4_hc) %>%
+  st_as_sf()
+
+residuals_pal <- colorNumeric(
+  palette = "RdYlBu",
+  domain = model4$Residuals
+)
+
+leaflet() %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  addPolygons(
+    data = ces4_bay_residuals,
+    fillColor = ~residuals_pal(Residuals),
+    color = "white",
+    weight = 0.5,
+    fillOpacity = 0.5,
+    label = ~Residuals
+  ) %>%
+  addLegend(
+    data = ces4_bay_residuals,
+    pal = residuals_pal,
+    values = ces4_bay_residuals$Residuals,
+    title = "Healthcare coverage residuals"
+  )
+```
+
+A negative residual suggests that our regression model is over-estimating the rates of cardiovascular disease given the percent of people with healthcare in these areas. The lowest residuals occur in areas like downtown San Francisco and large parts of Marin and San Mateo counties. This suggests that in these areas there are other factors that are better predictors of cardiovascular disease than healthcare.
+
+The positive residual suggests that we would actually see more cases of cardiovascular disease than expected given the amount of people who have healthcare. These generally occur in the areas where rates of cardiovascular disease were highest to begin with. So this means that in areas where there are high rates of cardiovascular disease, looking at the percent of people without health insurance alone will lead to an under-prediction of cases of cardiovascular diseases. 
+
+
+# PART 4: Mapping private health insurance coverage by white immigrant and non-white immigrant populations in the Bay Area 
+Finally, we will look at the intersecting identities of race, immigration status, and multigenerational households to see how this may relate to health insurance in the Bay Area. Multigenerational households are a higher risk group because of the age of the members of the household. For example, you may have had personal experience during the COVID-19 pandemic where you or someone you know had to be extra cautious because they had an elderly relative living with them. For these high risk populations, not having access to healthcare makes them even more vulnerable. Here we will use PUMS data to understand how these identities relate.
+
 ```{r}
 #This part utilizes PUMS data to map healthcare coverage based on race and immigration status
 
-# temp <- tempfile()
-# download.file("https://www2.census.gov/programs-surveys/acs/data/pums/2019/1-Year/csv_hca.zip",destfile = temp)
-# 
-# pums_hca_2019_1yr <- read_csv(unzip(temp,"psam_h06.csv"))
-# 
-# unlink(temp)
+temp <- tempfile()
+download.file("https://www2.census.gov/programs-surveys/acs/data/pums/2019/1-Year/csv_hca.zip",destfile = temp)
+
+pums_hca_2019_1yr <- read_csv(unzip(temp,"psam_h06.csv"))
+
+unlink(temp)
 
 #Load PUMS data with variables for race, private health insurance coverage, and public health insurance coverage
-# pums_2019_1yr <- getCensus(
-#   name = "acs/acs1/pums",
-#   vintage = 2019,
-#   region = "public use microdata area:*",
-#   regionin = "state:06",
-#   vars = c(
-#     "SERIALNO",
-#     "SPORDER",
-#     "PWGTP",
-#     "WGTP",
-#     "RAC1P",
-#     "CIT",
-#     "PRIVCOV",
-#     "PUBCOV"
-#   )
-# )
-# 
-# saveRDS(pums_2019_1yr, "final_pums.rds")
+pums_2019_1yr <- getCensus(
+  name = "acs/acs1/pums",
+  vintage = 2019,
+  region = "public use microdata area:*",
+  regionin = "state:06",
+  vars = c(
+    "SERIALNO",
+    "SPORDER",
+    "PWGTP",
+    "WGTP",
+    "RAC1P",
+    "CIT",
+    "MULTG",
+    "PRIVCOV",
+    "PUBCOV"
+  )
+)
+
+saveRDS(pums_2019_1yr, "final_pums.rds")
 pums_2019_1yr <- readRDS("final_pums.rds")
 
 ca_pumas <-
   pumas("CA", cb = T, progress_bar = F)
-
-bay_county_names <-
-  c(
-    "Alameda",
-    "Contra Costa",
-    "Marin",
-    "Napa",
-    "San Francisco",
-    "San Mateo",
-    "Santa Clara",
-    "Solano",
-    "Sonoma"
-  )
 
 #Create dataframe of Bay Area counties with spatial data
 bay_counties <-
@@ -566,6 +711,7 @@ bay_pums <-
   ) %>% 
   filter(PUMA %in% bay_pumas$PUMACE10)
 ```
+
 ```{r}
 #Percent of households with health insurance coverage in Bay Area PUMAS
 
@@ -630,7 +776,7 @@ bay_pums <-
 
 
 ```{r}
-#Step 2: Finding percentages of white and nonwhite immigrant households with private health insurance coverage
+#Step 2: Finding percentages of white and nonwhite immigrant multigenerational households with health insurance
 
 w_hc <-
   bay_pums %>% 
@@ -639,16 +785,18 @@ w_hc <-
     WGTP = as.numeric(WGTP),
     white_pop = ifelse(
       (RAC1P == 1) &
-      (CIT != 1),
+      (CIT != 1) &
+      (MULTG != 2),
       WGTP,
       0
     ),
     w_hc_pop = ifelse(
       (RAC1P == 1) & #Race is white alone
       (CIT != 1) & #Was not born in the US
-      (PRIVCOV == 1), #Has private health insurance
-      # ((PRIVCOV == 1) | #Has private or public health insurance
-      # (PUBCOV == 1)),
+      # (PRIVCOV == 1) & #Has private health insurance
+      (MULTG == 2) & #Is a multigenerational household
+      ((PRIVCOV == 1) | #Has private or public health insurance
+      (PUBCOV == 1)),
       WGTP,
       0
     )
@@ -672,16 +820,18 @@ nw_hc <-
     WGTP = as.numeric(WGTP),
     nonwhite_pop = ifelse(
       (RAC1P != 1)&
-      (CIT != 1),
+      (CIT != 1) &
+      (MULTG != 2),
       WGTP,
       0
     ),
     nw_hc_pop = ifelse(
       (RAC1P != 1) & #Race is white alone
       (CIT != 1) & #Was not born in the US
-      (PRIVCOV == 1), #Has private health insurance
-      # ((PRIVCOV == 1) | #Has private or public health insurance
-      # (PUBCOV == 1)),
+      # (PRIVCOV == 1) & #Has private health insurance
+      (MULTG == 2) & #Is a multigenerational household
+      ((PRIVCOV == 1) | #Has private or public health insurance
+      (PUBCOV == 1)),
       WGTP,
       0
     )
@@ -703,66 +853,13 @@ race_pums_pal <- colorNumeric(
   domain = nw_hc$perc_specific_pop
 )
 
-# leaflet() %>%
-#   addTiles() %>% 
-#   addPolygons(
-#     data = w_hc,
-#     fillColor = ~race_pums_pal(perc_specific_pop),
-#     color = "white",
-#     opacity = 0.5,
-#     fillOpacity = 0.5,
-#     weight = 1,
-#     label = ~paste0(
-#       round(perc_specific_pop), 
-#       "% white immigrant households with health insurance coverage"
-#     ),
-#     highlightOptions = highlightOptions(
-#       weight = 2,
-#       opacity = 1
-#     )
-#   ) %>% 
-#   addLegend(
-#     data = w_hc,
-#     pal = race_pums_pal,
-#     values = ~perc_specific_pop,
-#     title = "% white immigrant households with health insurance coverage"
-#   )
 ```
 
-Percent of white and non-white households with health insurance coverage in Bay Area PUMAS
-```{r}
-#Mapping non-white households with health insurance coverage
-
-# leaflet() %>%
-#   addTiles() %>% 
-#   addPolygons(
-#     data = nw_hc,
-#     fillColor = ~race_pums_pal(perc_specific_pop),
-#     color = "white",
-#     opacity = 0.5,
-#     fillOpacity = 0.5,
-#     weight = 1,
-#     label = ~paste0(
-#       round(perc_specific_pop), 
-#       "% non-white immigrant households with health insurance coverage"
-#     ),
-#     highlightOptions = highlightOptions(
-#       weight = 2,
-#       opacity = 1
-#     )
-#   ) %>% 
-#   addLegend(
-#     data = nw_hc,
-#     pal = race_pums_pal,
-#     values = ~perc_specific_pop,
-#     title = "% non-white immigrant households with health insurance coverage"
-#   )
-```
-
+Percent of white and non-white immigrant multigenerational households with health insurance coverage in Bay Area PUMAS
 ```{r}
 #Step 3: Mapping white and nonwhite immigrant households with private health insurance
 leaflet() %>%
-  addTiles() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
   addPolygons(
     data = w_hc,
     fillColor = ~race_pums_pal(perc_specific_pop),
@@ -772,7 +869,7 @@ leaflet() %>%
     weight = 1,
     label = ~paste0(
       round(perc_specific_pop), 
-      "% white immigrant households with private health insurance"
+      "% white immigrant multigenerational households with private health insurance"
     ),
     highlightOptions = highlightOptions(
       weight = 2,
@@ -789,7 +886,7 @@ leaflet() %>%
     weight = 1,
     label = ~paste0(
       round(perc_specific_pop), 
-      "% non-white immigrant households with private health insurance"
+      "% non-white immigrant multigenerational households with health insurance"
     ),
     highlightOptions = highlightOptions(
       weight = 2,
@@ -801,7 +898,8 @@ leaflet() %>%
     data = nw_hc,
     pal = race_pums_pal,
     values = ~perc_specific_pop,
-    title = "% households with private health insurance",
+    title = "% multigenerational immigrant households 
+    with health insurance",
   ) %>%
   addLayersControl(
     baseGroups = c("white", "nonwhite"),
@@ -809,7 +907,7 @@ leaflet() %>%
   )
 ```
 
-Difference between the percent of white and non-white households with health insurance coverage in Bay Area PUMAS
+Difference between the percent of white and non-white immigrant multigenerational households with health insurance coverage in Bay Area PUMAS
 ```{r}
 #Step 4: Finding and mapping the difference between %white households and %nonwhite households with private health insurance coverage
 
@@ -824,7 +922,7 @@ diff_pal <- colorNumeric(
 )
 
 leaflet() %>%
-  addTiles() %>% 
+  addProviderTiles(providers$CartoDB.Positron) %>%
   addPolygons(
     data = diff_hc_by_race,
     fillColor = ~diff_pal(DIFF),
@@ -834,7 +932,7 @@ leaflet() %>%
     weight = 1,
     label = ~paste0(
       round(DIFF), 
-      "% difference in number of white and nonwhite households"
+      "% difference in number of white and nonwhite multigenerational immigrant households"
     ),
     highlightOptions = highlightOptions(
       weight = 2,
@@ -845,22 +943,20 @@ leaflet() %>%
     data = diff_hc_by_race,
     pal = diff_pal,
     values = ~DIFF,
-    title = "difference in % white and nonwhite households with private health insurance"
+    title = "difference in % white and nonwhite multigenerational immigrant households with private health insurance"
   )
 ```
 
-```{r}
-#Sum differences in PUMAS to the county level
+This map shows a similar pattern to the map that looked only at race and health insurance. We see that there is more area where the percent of white households with health insurance is lower than the percent of nonwhite households. However, in the areas where the percent of nonwhite households with insurance is lower, the difference between the two groups is greater in magnitude. This map is useful in understanding that race may be a more important factor to look at in terms of healthcare inequity than whether or not an individual was born in the U.S. or lives in an multigenerational household.
 
-#Keep only first 3 digits of PUMA codes (FIPS codes)
-diff_hc_by_race$PUMA <- substr(diff_hc_by_race$PUMA, 0, 3)
 
-#Take the mean difference between percent white and non-white households with health insurance in each county
-hc_by_race_avg <- diff_hc_by_race %>%
-  st_set_geometry(NULL) %>%
-  mutate(COUNTYFP = PUMA) %>%
-  select(-PUMA) %>%
-  group_by(COUNTYFP) %>%
-  summarize(mean = mean(DIFF))
-```
-Averaging across PUMAs, we see that the discrepancy between the percent of white and non-white households with private health insurance is greatest in Sonoma County. 
+
+
+Sources
+
+David U. Himmelstein, Robert M. Lawless, Deborah Thorne, Pamela Foohey, and Steffie Woolhandler, 2019: Medical Bankruptcy: Still Common Despite the Affordable Care Act
+American Journal of Public Health 109, 431_433, https://doi.org/10.2105/AJPH.2018.304901
+
+“What Are the 12 Leading Causes of Death in the United States?” Healthline, November 1, 2018. ​​https://www.healthline.com/health/leading-causes-of-death 
+
+Cosselman, K., Navas-Acien, A. & Kaufman, J. Environmental factors in cardiovascular disease. Nat Rev Cardiol 12, 627–642 (2015). https://doi.org/10.1038/nrcardio.2015.152 
